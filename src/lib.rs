@@ -13,73 +13,25 @@ pub fn copy_dir_entry(cmd: &Command) -> Result<String, String> {
 /// Returns Err in case of insuffient rights/unexisting entry
 /// rm <options> <dir entry>
 pub fn remove_dir_entry(cmd: &Command) -> Result<String, String> {
-
-    /*
-    let file = cmd.get_parameter_at(cmd.get_params_count()-1);
-
-    let options = cmd.get_parameter_at(cmd.get_params_count()-2);
-
-    let options = match options {
-        Ok("-r") => Some(_),
-        Ok(_) => None,
-        Err(_) => panic!("Invalid state"),
+    let file = match cmd.get_parameter_at(0) {
+        Some(s) => s,
+        None => return Err("Target entry is not specified".to_string()),
     };
 
-    if file == cmd.get_name(){
-        return Err("Missing parameter.")
-    }
-
-    let file = match file {
-        Ok(s) => s,
-        Err(_) => return Err("Entry param is not specified".to_string()),
+    let metadata = match metadata(file) {
+        Ok(r) => r,
+        Err(e) => return Err(e.to_string()),
     };
 
-    if cmd.get_params_count() > 1 {
-        let options = cmd.get_parameter_at(0);
-        let file = cmd.get_parameter_at(1);
-
-        let file = match file {
-            Ok(s) => s,
-            Err(_) => return Err("Entry param is not specified".to_string()),
-        };
-
-        let metadata = match metadata(file) {
-            Ok(r) => r,
-            Err(e) => return Err(e.to_string()),
-        };
-
-        if metadata.is_file() {
-            rm_file(file)
-        } else {
-            let options = match options {
-                Ok("r") => Some("r"),
-                Ok(_) => None,
-                Err(_) => panic!("Invalid state"),
-            };
-
-            let result = match options {
-                Some(_) => remove_dir_all(file),
-                None => remove_dir(file),
-            };
-
-            match result {
-                Ok(_) => Ok(format!("Dir: {} deleted", file)),
-                Err(_) => Err("Failed to delete dir.".to_string()),
-            }
+    let result = match metadata {
+        metadata if metadata.is_file() => rm_file(file),
+        metadata if metadata.is_dir() => {
+            let option = cmd.has_option('r');
+            rm_dir(file, option)
         }
-    } else {
-        let file = cmd.get_parameter_at(0);
-
-        let file = match file {
-            Ok(s) => s,
-            Err(_) => return Err("Entry param is not specified".to_string()),
-        };
-
-        rm_file(file)
-
-    }
-    */
-    Ok("ok".to_string())
+        _ => return Err("Target entry is not file nor dir".to_string()),
+    };
+    result
 }
 
 fn rm_file(file: &str) -> Result<String, String> {
@@ -89,10 +41,23 @@ fn rm_file(file: &str) -> Result<String, String> {
     };
 }
 
+fn rm_dir(file: &str, recursive: bool) -> Result<String, String> {
+    match recursive {
+        true => match remove_dir_all(file) {
+            Ok(_) => return Ok(format!("Directory: {} deleted", file)),
+            Err(e) => return Err(e.to_string()),
+        }
+        false => match remove_dir(file) {
+            Ok(_) => return Ok(format!("Directory: {} deleted", file)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+}   
+
 /// <command> <options> <arguments...>
 pub struct Command<'a> {
     name: String,
-    options: Option<Vec<char>>,
+    options: Option<&'a str>,
     params: Option<Vec<&'a str>>,
 }
 
@@ -102,20 +67,20 @@ impl Command<'_> {
             panic!("Command name must be specified.")
         }
 
-        let (pars,opts) = match buffer.len() > 1 {
-           true => if buffer.len() > 2 {
-               let mut chars = buffer[1].chars().peekable();
-            if chars.next() == Some('-') && chars.peek() != None {
-                (Some(buffer[2..].to_vec()), Some(chars.collect::<Vec<_>>()))
-            } else {
-                 (Some(buffer[1..].to_vec()), None)
+        let (pars, opts) = match buffer.len() > 1 {
+            true => {
+                if buffer.len() > 2 {
+                    let mut chars = buffer[1].chars();
+                    if chars.next() == Some('-') {
+                        (Some(buffer[2..].to_vec()), Some(chars.as_str()))
+                    } else {
+                        (Some(buffer[1..].to_vec()), None)
+                    }
+                } else {
+                    (Some(buffer[1..].to_vec()), None)
+                }
             }
-           } else {
-            (Some(buffer[1..].to_vec()),None)
-           }
-           false => {
-               (None,None)
-           }
+            false => (None, None),
         };
 
         Command {
@@ -125,33 +90,29 @@ impl Command<'_> {
         }
     }
 
-    
+    pub fn has_option(&self, option: char) -> bool {
+        match self.options {
+            Some(o) => o.chars().any(|c| option == c),
+            None => false,
+        }
+    }
+
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
     pub fn get_parameter_at(&self, index: usize) -> Option<&str> {
         match &self.params {
-            Some(v) =>  {
+            Some(v) => {
                 if v.len() > index {
                     Some(&v[index])
-                }
-                else {
+                } else {
                     None
                 }
             }
-            None => None
+            None => None,
         }
     }
-
-    /*
-    pub fn get_options(&self, index: usize) -> Result<&str, &'static str> {
-        match self.params.len() > index {
-            true => Ok(&self.params[index]),
-            false => None,
-        }
-    }
-    */
 
     pub fn get_params_count(&self) -> usize {
         match &self.params {
@@ -165,8 +126,9 @@ impl Command<'_> {
 mod tests {
     use super::*;
     use core::panic;
+
     #[test]
-    fn return_correct_name() {
+    fn returns_correct_name() {
         let cmd_vector = vec!["copy", "from", "to"];
         let cmd = Command::new(cmd_vector);
 
@@ -174,20 +136,33 @@ mod tests {
     }
 
     #[test]
-    fn return_correct_param_at() {
+    fn access_existing_param() {
         let cmd_vector = vec!["copy", "from", "to"];
         let cmd = Command::new(cmd_vector);
 
-        assert_eq!(Ok("from"), cmd.get_parameter_at(0));
-        assert_eq!(Ok("to"), cmd.get_parameter_at(1));
+        assert_eq!(Some("from"), cmd.get_parameter_at(0));
+        assert_eq!(Some("to"), cmd.get_parameter_at(1));
     }
 
     #[test]
-    fn access_out_of_bounds() {
-        let cmd_vector = vec!["copy", "from", "to"];
+    fn access_not_existing_param() {
+        let cmd_vector = vec!["copy"];
         let cmd = Command::new(cmd_vector);
 
-        assert_eq!(Err("Index out of bound"), cmd.get_parameter_at(2));
+        assert_eq!(None, cmd.get_parameter_at(0));
+    }
+
+    #[test]
+    fn access_option() {
+        let cmd_vector = vec!["copy", "-abc", "from", "to"];
+        let cmd = Command::new(cmd_vector);
+
+        assert!(cmd.has_option('a'));
+        assert!(cmd.has_option('b'));
+        assert!(cmd.has_option('c'));
+        assert!(false == cmd.has_option('d'));
+        assert_eq!(Some("from"), cmd.get_parameter_at(0));
+        assert_eq!(Some("to"), cmd.get_parameter_at(1));
     }
 
     #[test]
