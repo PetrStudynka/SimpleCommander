@@ -27,7 +27,7 @@ fn main() {
 
     match result {
         Ok(s) => println!(
-            "Command: {} executed successfully, with result: {}",
+            "Command: {} executed successfully with result: {}",
             command.get_name(),
             s
         ),
